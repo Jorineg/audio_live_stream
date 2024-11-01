@@ -4,14 +4,17 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'dart:async';
 
 class WebServer {
   HttpServer? _server;
   final List<WebSocketSink> _clients = [];
   Function(int)? onClientCountChanged;
   BonsoirBroadcast? _mdnsBroadcast;
+  final StreamController<double> _latencyStreamController = StreamController.broadcast();
 
   HttpServer? get server => _server;
+  Stream<double> get latencyStream => _latencyStreamController.stream;
 
   Future<void> start(String mdnsName) async {
     if (_server != null) {
@@ -64,6 +67,9 @@ class WebServer {
 
     // mDNS-Service registrieren
     await _registerMDNSService(mdnsName);
+
+    // Start sending timestamp messages to clients
+    _sendTimestampMessages();
   }
 
   void _handleHttpRequest(HttpRequest request) async {
@@ -118,7 +124,11 @@ class WebServer {
     onClientCountChanged?.call(_clients.length);
 
     webSocket.stream.listen(
-      (_) {},
+      (message) {
+        if (message is String && message.startsWith('time:')) {
+          _handleTimestampMessage(message);
+        }
+      },
       onDone: () {
         print('WebSocket-Verbindung geschlossen');
         _clients.remove(webSocket.sink);
@@ -192,6 +202,7 @@ class WebServer {
       // mDNS-Service stoppen
       await _mdnsBroadcast?.stop();
       _mdnsBroadcast = null;
+      _latencyStreamController.close();
     } catch (e) {
       print('Fehler beim Stoppen des Servers: $e');
     }
@@ -199,5 +210,29 @@ class WebServer {
 
   void dispose() {
     stop();
+  }
+
+  void _sendTimestampMessages() {
+    Timer.periodic(Duration(seconds: 1), (timer) {
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final message = 'time:$timestamp';
+      for (var client in _clients) {
+        try {
+          client.add(message);
+        } catch (e) {
+          print('Fehler beim Senden der Zeitstempel-Nachricht: $e');
+        }
+      }
+    });
+  }
+
+  void _handleTimestampMessage(String message) {
+    final sentTimestamp = int.tryParse(message.split(':')[1]);
+    if (sentTimestamp != null) {
+      final receivedTimestamp = DateTime.now().millisecondsSinceEpoch;
+      final roundTripTime = receivedTimestamp - sentTimestamp;
+      final averageLatency = roundTripTime / 2;
+      _latencyStreamController.add(averageLatency.toDouble());
+    }
   }
 }

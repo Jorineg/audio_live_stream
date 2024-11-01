@@ -128,6 +128,8 @@
                         if (micStatus === 'mic_muted') {
                             resetVisualizer();
                         }
+                    } else if (event.data.startsWith('time:')) { // P69c7
+                        webSocket.send(event.data); // P69c7
                     }
                 } else if (event.data instanceof ArrayBuffer) {
                     if (micStatus === 'mic_muted') return;
