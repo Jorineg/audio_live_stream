@@ -234,6 +234,7 @@ class _StreamingControlState extends State<StreamingControl> {
         _startStreaming();
       } else {
         _stopStreaming();
+        _audioSamples = []; // Reset visualizer data to zero level
       }
       if (_bitrateChangeNotification) {
         _streamingService.setBitrate(_selectedBitrate);
@@ -264,7 +265,10 @@ class _StreamingControlState extends State<StreamingControl> {
                 children: [
                   CustomPaint(
                     size: Size(200, 200),
-                    painter: CircularWaveformPainter(samples: _audioSamples),
+                    painter: CircularWaveformPainter(
+                      samples: _audioSamples,
+                      isMicMuted: !_isStreaming, // Pass the mic status
+                    ),
                   ),
                   StreamBuilder<double>(
                     stream: _streamingService.micLevelStream,
@@ -429,16 +433,18 @@ class CircularWaveformPainter extends CustomPainter {
   final List<int> samples;
   final Color color;
   final double strokeWidth;
+  final bool isMicMuted;
 
   CircularWaveformPainter({
     required this.samples,
     this.color = Colors.blueAccent,
     this.strokeWidth = 2.0,
+    required this.isMicMuted,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (samples.isEmpty) return;
+    if (isMicMuted || samples.isEmpty) return; // Stop drawing when mic is muted
 
     final center = Offset(size.width / 2, size.height / 2);
     final radius = min(center.dx, center.dy);
