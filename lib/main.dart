@@ -53,6 +53,7 @@ class _StreamingControlState extends State<StreamingControl> {
   int _selectedBitrate = 64; // Default bitrate
   bool _bitrateChangeNotification = false;
   List<int> _audioSamples = [];
+  double _latency = 0.0; // P503b
 
   static const platform = MethodChannel('com.jorin.audio_live_stream/hostname');
 
@@ -95,6 +96,12 @@ class _StreamingControlState extends State<StreamingControl> {
       });
       print('Anzahl verbundener Clients aktualisiert: $_connectedClients');
     };
+
+    _streamingService.webServer.latencyStream.listen((latency) { // P0225
+      setState(() {
+        _latency = latency;
+      });
+    });
   }
 
   Future<void> _initializeStreaming() async {
@@ -312,10 +319,11 @@ class _StreamingControlState extends State<StreamingControl> {
             style: const TextStyle(color: Colors.grey),
           ),
           const Spacer(),
-          // BitrateSlider(
-          //   initialBitrate: _selectedBitrate,
-          //   onBitrateChanged: _onBitrateChanged,
-          // ),
+          Text( // P49f4
+            'Average Latency: ${_latency.toStringAsFixed(2)} ms',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
+          ),
           const SizedBox(height: 20),
           _serverStarting
               ? const Center(
