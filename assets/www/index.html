@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Live Stream</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            overflow-x: hidden;
+        }
+
+        h1 {
+            margin-bottom: 1rem;
+        }
+
+        .container {
+            text-align: center;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 400px;
+            box-sizing: border-box;
+        }
+
+        #playButton {
+            border: none;
+            background: none;
+            padding: 0;
+        }
+
+        #statusMessage {
+            font-size: 18px;
+            margin-top: 1rem;
+            min-height: 27px;
+        }
+
+        #statusMessage.playing {
+            color: green;
+        }
+
+        #statusMessage.muted {
+            color: orange;
+        }
+
+        #visualizer {
+            width: 100%;
+            height: 100px;
+            background-color: #f0f0f0;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Audio Livestream</h1>
+    <div class="container">
+        <button id="playButton">
+            <img src="play.png" alt="Play" width="64" height="64">
+        </button>
+        <p id="statusMessage">Click to start audio</p>
+    </div>
+    <canvas id="visualizer"></canvas>
+    <script>
+        const playButton = document.getElementById('playButton');
+        const statusMessage = document.getElementById('statusMessage');
+        const visualizer = document.getElementById('visualizer');
+        const visualizerContext = visualizer.getContext('2d');
+        let audioContext;
+        let webSocket;
+        let micStatus = 'mic_active';
+        let audioQueue = [];
+        let isPlaying = false;
+        let scheduledTime = 0;
+        const BUFFER_SIZE = 2048;  // Reduced buffer size
+        let visualizerData = new Float32Array(BUFFER_SIZE);
+
+        // Set visualizer size
+        function resizeVisualizer() {
+            visualizer.width = window.innerWidth;
+            visualizer.height = 100;
+            drawWaveform();
+        }
+
+        window.addEventListener('resize', resizeVisualizer);
+        resizeVisualizer();
+
+        playButton.addEventListener('click', () => {
+            if (!audioContext) {
+                startStream();
+            } else {
+                stopStream();
+            }
+        });
+
+        function startStream() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            console.log('Audio context sample rate:', audioContext.sampleRate);
+            webSocket = new WebSocket('ws://' + window.location.host);
+
+            webSocket.binaryType = 'arraybuffer';
+            webSocket.onopen = () => {
+                console.log('WebSocket connection opened');
+                statusMessage.textContent = 'Connected, waiting for audio...';
+                updateStatusMessage();
+            };
+
+            webSocket.onclose = () => {
+                console.log('WebSocket connection closed');
+                stopStream();
+            };
+
+            webSocket.onmessage = (event) => {
+                if (typeof event.data === 'string') {
+                    if (event.data === 'mic_active' || event.data === 'mic_muted') {
+                        micStatus = event.data;
+                        updateStatusMessage();
+                    }
+                } else if (event.data instanceof ArrayBuffer) {
+                    if (micStatus === 'mic_muted') return;
+
+                    const int16Array = new Int16Array(event.data);
+                    // const int8Array = new Int8Array(event.data);
+                    const float32Array = new Float32Array(int16Array.length);
+                    // const float32Array = new Float32Array(int8Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                        // for (let i = 0; i < int8Array.length; i++) {
+                        float32Array[i] = int16Array[i] / 32768;
+                        // float32Array[i] = int8Array[i] / 128;
+                    }
+
+                    updateVisualizer(float32Array);
+                    processAudioData(float32Array);
+                }
+            };
+
+            playButton.innerHTML = '<img src="stop.png" alt="Stop" width="64" height="64">';
+            statusMessage.textContent = 'Connecting...';
+        }
+
+        function stopStream() {
+            if (webSocket) {
+                webSocket.close();
+                webSocket = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            audioQueue = [];
+            isPlaying = false;
+            scheduledTime = 0;
+            playButton.innerHTML = '<img src="play.png" alt="Play" width="64" height="64">';
+            statusMessage.textContent = 'Click to start audio';
+            statusMessage.className = '';
+            updateStatusMessage();
+        }
+
+        function updateStatusMessage() {
+            if (!audioContext) {
+                statusMessage.textContent = 'Click to start audio';
+                statusMessage.className = '';
+            } else if (micStatus === 'mic_active') {
+                statusMessage.innerHTML = 'Audio playing <span style="font-size: 24px;">&#128266;</span>';
+                statusMessage.className = 'playing';
+            } else {
+                statusMessage.innerHTML = 'Sender is muted <span style="font-size: 24px;">&#128263;</span>';
+                statusMessage.className = 'muted';
+            }
+        }
+
+        function processAudioData(float32Array) {
+            const resampledArray = resampleAudioData(float32Array, 16000, audioContext.sampleRate);
+
+            const audioBuffer = audioContext.createBuffer(1, resampledArray.length, audioContext.sampleRate);
+            audioBuffer.getChannelData(0).set(resampledArray);
+
+            const bufferSource = audioContext.createBufferSource();
+            bufferSource.buffer = audioBuffer;
+            bufferSource.connect(audioContext.destination);
+
+            const currentTime = audioContext.currentTime;
+            const playbackTime = Math.max(currentTime, scheduledTime);
+            bufferSource.start(playbackTime);
+
+            scheduledTime = playbackTime + audioBuffer.duration;
+        }
+
+        function resampleAudioData(inputArray, inputSampleRate, outputSampleRate) {
+            if (inputSampleRate === outputSampleRate) {
+                return inputArray;
+            }
+
+            const sampleRateRatio = outputSampleRate / inputSampleRate;
+            const newLength = Math.round(inputArray.length * sampleRateRatio);
+            const outputArray = new Float32Array(newLength);
+
+            for (let i = 0; i < newLength; i++) {
+                const idx = i / sampleRateRatio;
+                const idx_low = Math.floor(idx);
+                const idx_high = Math.min(idx_low + 1, inputArray.length - 1);
+                const weight = idx - idx_low;
+                outputArray[i] = (1 - weight) * inputArray[idx_low] + weight * inputArray[idx_high];
+            }
+            return outputArray;
+        }
+
+        function updateVisualizer(newData) {
+            visualizerData = new Float32Array([...visualizerData.slice(newData.length), ...newData]);
+            drawWaveform();
+        }
+
+        function drawWaveform() {
+            visualizerContext.clearRect(0, 0, visualizer.width, visualizer.height);
+            visualizerContext.beginPath();
+            visualizerContext.strokeStyle = '#3498db';
+            visualizerContext.lineWidth = 2;
+
+            const sliceWidth = visualizer.width / visualizerData.length;
+            for (let i = 0; i < visualizerData.length; i++) {
+                const x = i * sliceWidth;
+                const y = (visualizerData[i] + 1) * visualizer.height / 2;
+
+                if (i === 0) {
+                    visualizerContext.moveTo(x, y);
+                } else {
+                    visualizerContext.lineTo(x, y);
+                }
+            }
+
+            visualizerContext.stroke();
+        }
+
+        // Initial draw of the waveform
+        drawWaveform();
+    </script>
+</body>
+
+</html>
