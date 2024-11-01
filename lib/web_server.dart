@@ -11,7 +11,9 @@ class WebServer {
   final List<WebSocketSink> _clients = [];
   Function(int)? onClientCountChanged;
   BonsoirBroadcast? _mdnsBroadcast;
-  final StreamController<double> _latencyStreamController = StreamController.broadcast();
+  final StreamController<double> _latencyStreamController =
+      StreamController.broadcast();
+  double _emaLatency = 0.0;
 
   HttpServer? get server => _server;
   Stream<double> get latencyStream => _latencyStreamController.stream;
@@ -232,7 +234,13 @@ class WebServer {
       final receivedTimestamp = DateTime.now().millisecondsSinceEpoch;
       final roundTripTime = receivedTimestamp - sentTimestamp;
       final averageLatency = roundTripTime / 2;
-      _latencyStreamController.add(averageLatency.toDouble());
+      _emaLatency = _calculateEMA(_emaLatency, averageLatency.toDouble());
+      _latencyStreamController.add(_emaLatency);
     }
+  }
+
+  double _calculateEMA(double previousEMA, double newValue) {
+    const double alpha = 0.2;
+    return alpha * newValue + (1 - alpha) * previousEMA;
   }
 }
