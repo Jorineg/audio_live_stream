@@ -53,7 +53,9 @@ class _StreamingControlState extends State<StreamingControl> {
   int _selectedBitrate = 64; // Default bitrate
   bool _bitrateChangeNotification = false;
   List<int> _audioSamples = [];
-  double _latency = 0.0; // P503b
+  double _latency = 0.0;
+  double _emaLatency = 0.0;
+  Timer? _timer;
 
   static const platform = MethodChannel('com.jorin.audio_live_stream/hostname');
 
@@ -65,17 +67,13 @@ class _StreamingControlState extends State<StreamingControl> {
     _getDeviceName();
 
     List<int> _processAudioSamples(Uint8List data) {
-      // Convert Uint8List to List<int>
-      // Assuming data is in 16-bit PCM little-endian format
       final audioData = ByteData.sublistView(data);
       List<int> samples = [];
       for (int i = 0; i < audioData.lengthInBytes; i += 2) {
         int sample = audioData.getInt16(i, Endian.little);
         samples.add(sample);
       }
-      // Optionally, apply smoothing or take only a subset of samples
-      // For example, downsample to 360 samples to represent degrees in a circle
-      int desiredSampleCount = 360; // Adjust as needed
+      int desiredSampleCount = 360;
       int step = max(1, samples.length ~/ desiredSampleCount);
       List<int> downsampled = [];
       for (int i = 0; i < samples.length; i += step) {
@@ -97,9 +95,15 @@ class _StreamingControlState extends State<StreamingControl> {
       print('Anzahl verbundener Clients aktualisiert: $_connectedClients');
     };
 
-    _streamingService.webServer.latencyStream.listen((latency) { // P0225
+    _streamingService.webServer.latencyStream.listen((latency) {
       setState(() {
-        _latency = latency;
+        _emaLatency = latency;
+      });
+    });
+
+    _timer = Timer.periodic(Duration(seconds: 1), (timer) {
+      setState(() {
+        _latency = _emaLatency;
       });
     });
   }
@@ -124,7 +128,6 @@ class _StreamingControlState extends State<StreamingControl> {
     } catch (e) {
       print('Fehler beim Starten des Servers: $e');
       if (mounted) {
-        // Show error in gray box
         setState(() {
           _serverStarting = false;
           _errorMessage = 'Fehler beim Starten des Servers: $e';
@@ -134,8 +137,7 @@ class _StreamingControlState extends State<StreamingControl> {
   }
 
   Future<void> _stopServer() async {
-    await _streamingService
-        .stopStreaming(); // Streaming stoppen, wenn Server gestoppt wird
+    await _streamingService.stopStreaming();
     setState(() {
       _isStreaming = false;
     });
@@ -241,7 +243,7 @@ class _StreamingControlState extends State<StreamingControl> {
         _startStreaming();
       } else {
         _stopStreaming();
-        _audioSamples = []; // Reset visualizer data to zero level
+        _audioSamples = [];
       }
       if (_bitrateChangeNotification) {
         _streamingService.setBitrate(_selectedBitrate);
@@ -274,7 +276,7 @@ class _StreamingControlState extends State<StreamingControl> {
                     size: Size(200, 200),
                     painter: CircularWaveformPainter(
                       samples: _audioSamples,
-                      isMicMuted: !_isStreaming, // Pass the mic status
+                      isMicMuted: !_isStreaming,
                     ),
                   ),
                   StreamBuilder<double>(
@@ -319,10 +321,14 @@ class _StreamingControlState extends State<StreamingControl> {
             style: const TextStyle(color: Colors.grey),
           ),
           const Spacer(),
-          Text( // P49f4
-            'Average Latency: ${_latency.toStringAsFixed(2)} ms',
+          Text(
+            _connectedClients == 0 || _latency > 2000
+                ? 'Average Latency: -'
+                : 'Average Latency: ${_latency.toStringAsFixed(0).padLeft(4, ' ')} ms',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.grey),
+            style: TextStyle(
+              color: _latency > 500 ? Colors.red : Colors.grey,
+            ),
           ),
           const SizedBox(height: 20),
           _serverStarting
@@ -378,6 +384,7 @@ class _StreamingControlState extends State<StreamingControl> {
   void dispose() {
     _streamingService.dispose();
     _stopAndroidForegroundService();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -452,7 +459,7 @@ class CircularWaveformPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (isMicMuted || samples.isEmpty) return; // Stop drawing when mic is muted
+    if (isMicMuted || samples.isEmpty) return;
 
     final center = Offset(size.width / 2, size.height / 2);
     final radius = min(center.dx, center.dy);
@@ -461,9 +468,7 @@ class CircularWaveformPainter extends CustomPainter {
     final path = Path();
     for (int i = 0; i < samples.length; i++) {
       final sample = samples[i];
-      // Normalize the sample to a value between 0 and 1
-      final normalizedSample = sample / 32768.0; // Assuming 16-bit PCM
-      // Adjust the radius based on the sample amplitude
+      final normalizedSample = sample / 32768.0;
       final sampleRadius =
           radius * 0.7 + (radius * 1.0 * normalizedSample.abs());
       final angle = i * anglePerSample;
@@ -475,7 +480,7 @@ class CircularWaveformPainter extends CustomPainter {
         path.lineTo(x, y);
       }
     }
-    path.close(); // Close the path to complete the circle
+    path.close();
 
     final paint = Paint()
       ..color = color
