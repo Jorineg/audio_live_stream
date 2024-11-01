@@ -125,6 +125,9 @@
                     if (event.data === 'mic_active' || event.data === 'mic_muted') {
                         micStatus = event.data;
                         updateStatusMessage();
+                        if (micStatus === 'mic_muted') {
+                            resetVisualizer();
+                        }
                     }
                 } else if (event.data instanceof ArrayBuffer) {
                     if (micStatus === 'mic_muted') return;
@@ -164,6 +167,7 @@
             statusMessage.textContent = 'Click to start audio';
             statusMessage.className = '';
             updateStatusMessage();
+            resetVisualizer();
         }
 
         function updateStatusMessage() {
@@ -217,6 +221,11 @@
 
         function updateVisualizer(newData) {
             visualizerData = new Float32Array([...visualizerData.slice(newData.length), ...newData]);
+            drawWaveform();
+        }
+
+        function resetVisualizer() {
+            visualizerData.fill(0);
             drawWaveform();
         }
 
