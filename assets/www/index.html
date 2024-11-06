@@ -83,6 +83,8 @@
         let scheduledTime = 0;
         const BUFFER_SIZE = 2048;  // Reduced buffer size
         let visualizerData = new Float32Array(BUFFER_SIZE);
+        let sampleRate = 22000;
+        let adpcmCompression = false;
 
         // Set visualizer size
         function resizeVisualizer() {
@@ -127,26 +129,45 @@
                         if (micStatus === 'mic_muted') {
                             resetVisualizer();
                         }
-                    } else if (event.data.startsWith('time:')) { // P69c7
-                        webSocket.send(event.data); // P69c7
+                    } else if (event.data.startsWith('time:')) {
+                        webSocket.send(event.data);
+                    } else {
+                        try {
+                            const settings = JSON.parse(event.data);
+                            // if (settings.sr) {
+                            //     sampleRate = settings.sr;
+                            //     console.log('Received sample rate:', sampleRate);
+                            // }
+                            // if (settings.adpcm) {
+                            //     adpcmCompression = settings.adpcm;
+                            //     console.log('Received ADPCM setting:', adpcmCompression);
+                            // }
+                        } catch (error) {
+                            console.error('Error parsing settings:', error);
+                        }
                     }
                 } else if (event.data instanceof ArrayBuffer) {
                     if (micStatus === 'mic_muted') return;
 
-                    // const int16Array = new Int16Array(event.data);
-                    const adpcmArray = new Uint8Array(event.data);
-                    const int16Array = new decodeADPCM8Bit(adpcmArray);
+                    // split off first byte that encodes header information
+                    const header = new Uint8Array(event.data, 0, 1)[0];
+                    const body = new Uint8Array(event.data.byteLength - 1);
+                    body.set(new Uint8Array(event.data, 1));
+                    // first bit of header is the ADPCM flag 1 = ADPCM, 0 = PCM
+                    // the rest is the sample rate in kHz
+                    adpcmCompression = (header & 0b10000000) > 0;
+                    sampleRate = (header & 0b01111111) * 1000;
 
-                    // print first 5 bytes of received data and first 5 samples of decoded data
-                    // console.log('Received data:', new Uint8Array(event.data).slice(0, 5), 'Decoded data:', new Uint8Array(int16Array.slice(0, 5)));
+                    let audioData;
+                    if (adpcmCompression) {
+                        audioData = decodeADPCM8Bit(body);
+                    } else {
+                        audioData = new Int16Array(body.buffer);
+                    }
 
-                    // const int8Array = new Int8Array(event.data);
-                    const float32Array = new Float32Array(int16Array.length);
-                    // const float32Array = new Float32Array(int8Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                        // for (let i = 0; i < int8Array.length; i++) {
-                        float32Array[i] = int16Array[i] / 32768;
-                        // float32Array[i] = int8Array[i] / 128;
+                    const float32Array = new Float32Array(audioData.length);
+                    for (let i = 0; i < audioData.length; i++) {
+                        float32Array[i] = audioData[i] / 32768;
                     }
 
                     updateVisualizer(float32Array);
@@ -189,10 +210,8 @@
             }
         }
 
-
-
         function processAudioData(float32Array) {
-            const resampledArray = resampleAudioData(float32Array, 16000, audioContext.sampleRate);
+            const resampledArray = resampleAudioData(float32Array, sampleRate, audioContext.sampleRate);
 
             const audioBuffer = audioContext.createBuffer(1, resampledArray.length, audioContext.sampleRate);
             audioBuffer.getChannelData(0).set(resampledArray);
@@ -204,12 +223,12 @@
             const currentTime = audioContext.currentTime;
             let playbackTime = Math.max(currentTime, scheduledTime);
 
-            // // if playbackTime is >= 0.5 seconds in the future, reset it to the current time
-            // if (playbackTime - currentTime > 0.5) {
-            //     console.log('Resetting scheduledTime. Latency too high:', playbackTime - currentTime);
-            //     scheduledTime = currentTime;
-            //     playbackTime = currentTime;
-            // }
+            // if playbackTime is >= 0.5 seconds in the future, reset it to the current time
+            if (playbackTime - currentTime > 0.5) {
+                console.log('Resetting scheduledTime. Latency too high:', playbackTime - currentTime);
+                scheduledTime = currentTime;
+                playbackTime = currentTime;
+            }
 
             bufferSource.start(playbackTime);
 

@@ -57,6 +57,9 @@ class _StreamingControlState extends State<StreamingControl> {
   double _emaLatency = 0.0;
   Timer? _timer;
 
+  double _sampleRate = 16000; // Default sample rate
+  bool _adpcmCompression = false; // Default ADPCM compression state
+
   static const platform = MethodChannel('com.jorin.audio_live_stream/hostname');
 
   @override
@@ -252,8 +255,29 @@ class _StreamingControlState extends State<StreamingControl> {
     });
   }
 
+  void _onSampleRateChanged(double newSampleRate) {
+    setState(() {
+      _sampleRate = newSampleRate;
+      _streamingService.setSampleRate(newSampleRate);
+    });
+  }
+
+  void _onAdpcmCompressionChanged(bool newAdpcmCompression) {
+    setState(() {
+      _adpcmCompression = newAdpcmCompression;
+      _streamingService.setAdpcmCompression(newAdpcmCompression);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    double dataSendRate =
+        _streamingService.getCurrentDataSendRate() * _connectedClients;
+    String dataSendRateText = dataSendRate >= 1000
+        ? '${(dataSendRate / 1000).toStringAsFixed(2)} Mbps'
+        : '${dataSendRate.toStringAsFixed(0)} kbps';
+    Color dataSendRateColor = dataSendRate > 10000 ? Colors.red : Colors.grey;
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -264,8 +288,8 @@ class _StreamingControlState extends State<StreamingControl> {
             style: Theme.of(context).textTheme.titleLarge,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 20),
-          SizedBox(height: MediaQuery.of(context).size.height * 0.1),
+          // const SizedBox(height: 20),
+          // SizedBox(height: MediaQuery.of(context).size.height * 0.1),
           Center(
             child: GestureDetector(
               onTap: _toggleStreaming,
@@ -310,7 +334,7 @@ class _StreamingControlState extends State<StreamingControl> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          // const SizedBox(height: 16),
           Text(
             _serverStarting
                 ? 'Server is starting...'
@@ -321,16 +345,54 @@ class _StreamingControlState extends State<StreamingControl> {
             style: const TextStyle(color: Colors.grey),
           ),
           const Spacer(),
+          const SizedBox(height: 20),
           Text(
             _connectedClients == 0 || _latency > 2000
-                ? 'Average Latency: -'
-                : 'Average Latency: ${_latency.toStringAsFixed(0).padLeft(4, ' ')} ms',
+                ? 'Latency: -'
+                : 'Latency: ${_latency.toStringAsFixed(0).padLeft(4, ' ')} ms',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: _latency > 500 ? Colors.red : Colors.grey,
             ),
           ),
+          Text(
+            'Send Rate: $dataSendRateText',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: dataSendRateColor,
+            ),
+          ),
           const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Sample Rate: ${_sampleRate.toInt()} Hz'),
+              Row(
+                children: [
+                  Checkbox(
+                    value: _adpcmCompression,
+                    onChanged: (bool? value) {
+                      if (value != null) {
+                        _onAdpcmCompressionChanged(value);
+                      }
+                    },
+                  ),
+                  Text('Compression'),
+                ],
+              ),
+            ],
+          ),
+          Slider(
+            value: _sampleRate,
+            min: 8000,
+            max: 22000,
+            divisions: 14,
+            label: '${_sampleRate.toInt()} Hz',
+            onChanged: (double value) {
+              _onSampleRateChanged(value);
+            },
+          ),
+          // const SizedBox(height: 20),
           _serverStarting
               ? const Center(
                   child: Text('Server is starting...',
