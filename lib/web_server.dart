@@ -11,7 +11,9 @@ class WebServer {
   final List<WebSocketSink> _clients = [];
   Function(int)? onClientCountChanged;
   BonsoirBroadcast? _mdnsBroadcast;
-  final StreamController<double> _latencyStreamController = StreamController.broadcast();
+  final StreamController<double> _latencyStreamController =
+      StreamController.broadcast();
+  double _emaLatency = 0.0;
 
   HttpServer? get server => _server;
   Stream<double> get latencyStream => _latencyStreamController.stream;
@@ -148,13 +150,175 @@ class WebServer {
 
   String lastMicStatus = 'mic_muted';
 
-  void broadcastAudioData(List<int> data) {
+  Uint8List encodeADPCM8Bit(Uint8List input) {
+    int len = input.length ~/ 2;
+    Uint8List output = Uint8List(len);
+
+    // ADPCM encoder variables
+    int prevSample = 0;
+    int index = 0;
+
+    // Step size table for ADPCM (standard table with 89 entries)
+    List<int> stepSizeTable = [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      16,
+      17,
+      19,
+      21,
+      23,
+      25,
+      28,
+      31,
+      34,
+      37,
+      41,
+      45,
+      50,
+      55,
+      60,
+      66,
+      73,
+      80,
+      88,
+      97,
+      107,
+      118,
+      130,
+      143,
+      157,
+      173,
+      190,
+      209,
+      230,
+      253,
+      279,
+      307,
+      337,
+      371,
+      408,
+      449,
+      494,
+      544,
+      598,
+      658,
+      724,
+      796,
+      876,
+      963,
+      1060,
+      1166,
+      1282,
+      1411,
+      1552,
+      1707,
+      1878,
+      2066,
+      2272,
+      2499,
+      2749,
+      3024,
+      3327,
+      3660,
+      4026,
+      4428,
+      4871,
+      5358,
+      5894,
+      6484,
+      7132,
+      7845,
+      8630,
+      9493,
+      10442,
+      11487,
+      12635,
+      13899,
+      15289,
+      16818,
+      18500,
+      20350,
+      22385,
+      24623,
+      27086,
+      29794,
+      32767
+    ];
+
+    // Index table for ADPCM
+    List<int> indexTable = [-1, -1, -1, -1, 2, 4, 6, 8];
+
+    for (int n = 0; n < len; n++) {
+      int sample = (input[n * 2] & 0xFF) | ((input[n * 2 + 1] & 0xFF) << 8);
+      if (sample > 32767) sample -= 65536; // Convert to signed 16-bit
+
+      int diff = sample - prevSample;
+      int code = 0;
+      if (diff < 0) {
+        code = 8;
+        diff = -diff;
+      }
+
+      int step = stepSizeTable[index];
+
+      int temp = 0;
+      if (diff >= step) {
+        code |= 4;
+        diff -= step;
+        temp += step;
+      }
+      step >>= 1;
+      if (diff >= step) {
+        code |= 2;
+        diff -= step;
+        temp += step;
+      }
+      step >>= 1;
+      if (diff >= step) {
+        code |= 1;
+        temp += step;
+      }
+
+      // Update previous sample
+      if ((code & 8) != 0)
+        prevSample -= temp;
+      else
+        prevSample += temp;
+
+      // Clamp prevSample to 16-bit
+      if (prevSample > 32767)
+        prevSample = 32767;
+      else if (prevSample < -32768) prevSample = -32768;
+
+      // Update index
+      index += indexTable[code & 7];
+      if (index < 0)
+        index = 0;
+      else if (index > 88) index = 88;
+
+      output[n] = code & 0x0F; // Store as 8-bit value
+    }
+
+    return output;
+  }
+
+  void broadcastAudioData(Uint8List data) {
     // print('Sende Audiodaten: ${data.length} Bytes an ${_clients.length} Clients');
     List<WebSocketSink> clientsToRemove = [];
 
+    Uint8List adpcmData = encodeADPCM8Bit(data);
+    //print first 5 bytes of original and adpcm data
+    // print('Original data: ${data.sublist(0, 5)}, ADPCM data: ${adpcmData.sublist(0, 5)}');
+
     for (var client in _clients) {
       try {
-        client.add(data);
+        client.add(adpcmData);
       } catch (e) {
         print('Fehler beim Senden an Client: $e');
         clientsToRemove.add(client);
@@ -232,7 +396,13 @@ class WebServer {
       final receivedTimestamp = DateTime.now().millisecondsSinceEpoch;
       final roundTripTime = receivedTimestamp - sentTimestamp;
       final averageLatency = roundTripTime / 2;
-      _latencyStreamController.add(averageLatency.toDouble());
+      _emaLatency = _calculateEMA(_emaLatency, averageLatency.toDouble());
+      _latencyStreamController.add(_emaLatency);
     }
+  }
+
+  double _calculateEMA(double previousEMA, double newValue) {
+    const double alpha = 0.2;
+    return alpha * newValue + (1 - alpha) * previousEMA;
   }
 }
