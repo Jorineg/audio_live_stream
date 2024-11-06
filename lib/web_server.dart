@@ -151,14 +151,15 @@ class WebServer {
   String lastMicStatus = 'mic_muted';
 
   Uint8List encodeADPCM8Bit(Uint8List input) {
-    int len = input.length ~/ 2;
-    Uint8List output = Uint8List(len);
+    int len = input.length ~/ 2; // Number of 16-bit samples
+    Uint8List output =
+        Uint8List((len + 1) ~/ 2); // Each byte will hold two 4-bit codes
 
     // ADPCM encoder variables
     int prevSample = 0;
     int index = 0;
 
-    // Step size table for ADPCM (standard table with 89 entries)
+    // Step size table (standard IMA ADPCM table with 89 entries)
     List<int> stepSizeTable = [
       7,
       8,
@@ -259,37 +260,38 @@ class WebServer {
       if (sample > 32767) sample -= 65536; // Convert to signed 16-bit
 
       int diff = sample - prevSample;
-      int code = 0;
-      if (diff < 0) {
-        code = 8;
-        diff = -diff;
-      }
+      int sign = (diff < 0) ? 8 : 0;
+      if (sign != 0) diff = -diff;
 
       int step = stepSizeTable[index];
+      int diffq = 0;
 
-      int temp = 0;
+      int code = 0;
       if (diff >= step) {
         code |= 4;
         diff -= step;
-        temp += step;
+        diffq += step;
       }
       step >>= 1;
       if (diff >= step) {
         code |= 2;
         diff -= step;
-        temp += step;
+        diffq += step;
       }
       step >>= 1;
       if (diff >= step) {
         code |= 1;
-        temp += step;
+        diffq += step;
       }
 
-      // Update previous sample
-      if ((code & 8) != 0)
-        prevSample -= temp;
+      code |= sign;
+
+      // Update previous sample estimate
+      diffq += stepSizeTable[index] >> 3;
+      if (sign != 0)
+        prevSample -= diffq;
       else
-        prevSample += temp;
+        prevSample += diffq;
 
       // Clamp prevSample to 16-bit
       if (prevSample > 32767)
@@ -297,12 +299,19 @@ class WebServer {
       else if (prevSample < -32768) prevSample = -32768;
 
       // Update index
-      index += indexTable[code & 7];
+      index += indexTable[code & 0x07];
       if (index < 0)
         index = 0;
       else if (index > 88) index = 88;
 
-      output[n] = code & 0x0F; // Store as 8-bit value
+      // Pack two 4-bit codes into one byte
+      if (n % 2 == 0) {
+        // Store in higher nibble
+        output[n ~/ 2] = (code & 0x0F) << 4;
+      } else {
+        // Store in lower nibble
+        output[n ~/ 2] |= (code & 0x0F);
+      }
     }
 
     return output;

@@ -217,14 +217,14 @@
         }
 
         function decodeADPCM8Bit(adpcmData) {
-            const len = adpcmData.length;
+            const len = adpcmData.length * 2; // Each byte contains two samples
             const int16Array = new Int16Array(len);
 
             // ADPCM decoder variables
             let prevSample = 0;
             let index = 0;
 
-            // Step size table for ADPCM (standard table with 89 entries)
+            // Step size table (standard IMA ADPCM table with 89 entries)
             const stepSizeTable = [
                 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
                 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
@@ -238,33 +238,77 @@
             // Index table for ADPCM
             const indexTable = [-1, -1, -1, -1, 2, 4, 6, 8];
 
-            for (let n = 0; n < len; n++) {
-                let code = adpcmData[n] & 0x0F; // 8-bit value, lower 4 bits used
+            for (let n = 0; n < adpcmData.length; n++) {
+                const byte = adpcmData[n];
+                // Extract two 4-bit codes
+                const codeHigh = (byte >> 4) & 0x0F; // High nibble
+                const codeLow = byte & 0x0F;         // Low nibble
 
+                // Decode first sample
+                let code = codeHigh;
                 let step = stepSizeTable[index];
-                let diffq = step >> 3;
-                if (code & 1) diffq += step >> 2;
-                if (code & 2) diffq += step >> 1;
+                let diffq = 0;
+
+                let sign = code & 8;
+                code = code & 7;
+
                 if (code & 4) diffq += step;
-                if (code & 8)
-                    diffq = -diffq;
+                if (code & 2) diffq += step >> 1;
+                if (code & 1) diffq += step >> 2;
+                diffq += step >> 3;
 
-                prevSample += diffq;
+                if (sign)
+                    prevSample -= diffq;
+                else
+                    prevSample += diffq;
 
-                // Clamp prevSample to 16-bit
+                // Clamp prevSample
                 if (prevSample > 32767)
                     prevSample = 32767;
                 else if (prevSample < -32768)
                     prevSample = -32768;
 
+                int16Array[n * 2] = prevSample;
+
                 // Update index
-                index += indexTable[code & 7];
+                index += indexTable[code];
                 if (index < 0)
                     index = 0;
                 else if (index > 88)
                     index = 88;
 
-                int16Array[n] = prevSample;
+                // Decode second sample
+                code = codeLow;
+                step = stepSizeTable[index];
+                diffq = 0;
+
+                sign = code & 8;
+                code = code & 7;
+
+                if (code & 4) diffq += step;
+                if (code & 2) diffq += step >> 1;
+                if (code & 1) diffq += step >> 2;
+                diffq += step >> 3;
+
+                if (sign)
+                    prevSample -= diffq;
+                else
+                    prevSample += diffq;
+
+                // Clamp prevSample
+                if (prevSample > 32767)
+                    prevSample = 32767;
+                else if (prevSample < -32768)
+                    prevSample = -32768;
+
+                int16Array[n * 2 + 1] = prevSample;
+
+                // Update index
+                index += indexTable[code];
+                if (index < 0)
+                    index = 0;
+                else if (index > 88)
+                    index = 88;
             }
 
             return int16Array;
