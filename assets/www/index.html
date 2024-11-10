@@ -236,12 +236,21 @@
         }
 
         function decodeADPCM8Bit(adpcmData) {
-            const len = adpcmData.length * 2; // Each byte contains two samples
-            const int16Array = new Int16Array(len);
+            // Ensure adpcmData is a Uint8Array
+            if (!(adpcmData instanceof Uint8Array)) {
+                adpcmData = new Uint8Array(adpcmData);
+            }
 
-            // ADPCM decoder variables
-            let prevSample = 0;
-            let index = 0;
+            // Extract prevSample and index from the packet header
+            const headerView = new DataView(adpcmData.buffer, adpcmData.byteOffset, 4);
+            let prevSample = headerView.getInt16(0, true); // Little-endian
+            let index = headerView.getUint8(2);
+            // Skip the blank byte at headerView.getUint8(3);
+
+            // Extract the encoded data
+            const data = adpcmData.slice(4);
+            const len = data.length * 2; // Each byte contains two samples
+            const int16Array = new Int16Array(len);
 
             // Step size table (standard IMA ADPCM table with 89 entries)
             const stepSizeTable = [
@@ -257,8 +266,8 @@
             // Index table for ADPCM
             const indexTable = [-1, -1, -1, -1, 2, 4, 6, 8];
 
-            for (let n = 0; n < adpcmData.length; n++) {
-                const byte = adpcmData[n];
+            for (let n = 0; n < data.length; n++) {
+                const byte = data[n];
                 // Extract two 4-bit codes
                 const codeHigh = (byte >> 4) & 0x0F; // High nibble
                 const codeLow = byte & 0x0F;         // Low nibble

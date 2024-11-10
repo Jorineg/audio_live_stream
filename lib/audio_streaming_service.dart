@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'web_server.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:convert';
+import 'dart:math';
 
 class AudioStreamingService {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
@@ -24,6 +25,9 @@ class AudioStreamingService {
   final int _numChannels = 1; // Mono
   double _currentSampleRate = 16000; // Default sample rate
   bool _adpcmCompression = false; // Default ADPCM compression state
+
+  int prevSample = 0;
+  int index = 0;
 
   Stream<double> get micLevelStream => _micLevelController.stream;
 
@@ -173,18 +177,91 @@ class AudioStreamingService {
       return input;
     }
 
-    // Calculate sample rate ratio and new length in terms of 16-bit samples
+    // Convert Uint8List to List<double> (assuming 16-bit PCM)
+    final int numSamples = input.length ~/ 2;
+    final samples = List<double>.generate(numSamples, (i) {
+      int index = i * 2;
+      // Little-endian to int16
+      int sample = input[index] | (input[index + 1] << 8);
+      // Convert to signed value
+      if (sample >= 0x8000) sample -= 0x10000;
+      return sample.toDouble();
+    });
+
+    // Apply low-pass filter
+    final filteredSamples =
+        _lowPassFilter(samples, inputSampleRate, outputSampleRate);
+
+    // Resample
     final sampleRateRatio = outputSampleRate / inputSampleRate;
-    final newLength = (input.length ~/ 2 * sampleRateRatio).round();
-    final output = Uint8List(newLength * 2); // Each 16-bit sample takes 2 bytes
+    final newLength = (filteredSamples.length * sampleRateRatio).round();
+    final resampledSamples = List<double>.generate(newLength, (i) {
+      final index = i / sampleRateRatio;
+      final floorIndex = index.floor();
+      final ceilIndex = index.ceil();
+      if (ceilIndex >= filteredSamples.length) {
+        return filteredSamples.last;
+      }
+      final weight = index - floorIndex;
+      return filteredSamples[floorIndex] * (1 - weight) +
+          filteredSamples[ceilIndex] * weight;
+    });
 
+    // Convert back to Uint8List
+    final output = Uint8List(newLength * 2);
     for (int i = 0; i < newLength; i++) {
-      // Calculate index in the original array, in terms of 16-bit samples
-      final idx = (i / sampleRateRatio).floor() * 2;
+      int sample = resampledSamples[i].round();
+      // Clipping
+      if (sample > 32767) sample = 32767;
+      if (sample < -32768) sample = -32768;
+      // Convert to little-endian bytes
+      output[i * 2] = sample & 0xFF;
+      output[i * 2 + 1] = (sample >> 8) & 0xFF;
+    }
 
-      // Copy the two bytes of the 16-bit sample
-      output[i * 2] = input[idx];
-      output[i * 2 + 1] = input[idx + 1];
+    return output;
+  }
+
+  List<double> _lowPassFilter(
+      List<double> samples, int inputSampleRate, double outputSampleRate) {
+    final cutoffFreq = outputSampleRate / 2; // Nyquist frequency
+    final filterLength = 101; // Adjust for your needs (must be odd)
+    final filter = List<double>.filled(filterLength, 0);
+    final m = (filterLength - 1) / 2;
+
+    // Sinc filter coefficients
+    for (int n = 0; n < filterLength; n++) {
+      if (n == m) {
+        filter[n] = 2 * cutoffFreq / inputSampleRate;
+      } else {
+        final piTerm = pi * (n - m);
+        filter[n] =
+            sin(2 * cutoffFreq * (n - m) * pi / inputSampleRate) / piTerm;
+      }
+      // Apply Hamming window
+      filter[n] *= 0.54 - 0.46 * cos(2 * pi * n / (filterLength - 1));
+    }
+
+    // Normalize filter coefficients
+    final sum = filter.reduce((a, b) => a + b);
+    for (int n = 0; n < filterLength; n++) {
+      filter[n] /= sum;
+    }
+
+    // Convolve signal with filter
+    final paddedSamples =
+        List<double>.filled(samples.length + filterLength - 1, 0);
+    for (int i = 0; i < samples.length; i++) {
+      paddedSamples[i + (filterLength ~/ 2)] = samples[i];
+    }
+
+    final output = List<double>.filled(samples.length, 0);
+    for (int i = 0; i < samples.length; i++) {
+      double acc = 0;
+      for (int j = 0; j < filterLength; j++) {
+        acc += paddedSamples[i + j] * filter[j];
+      }
+      output[i] = acc;
     }
 
     return output;
@@ -193,11 +270,7 @@ class AudioStreamingService {
   Uint8List _encodeADPCM8Bit(Uint8List input) {
     int len = input.length ~/ 2; // Number of 16-bit samples
     Uint8List output =
-        Uint8List((len + 1) ~/ 2); // Each byte will hold two 4-bit codes
-
-    // ADPCM encoder variables
-    int prevSample = 0;
-    int index = 0;
+        Uint8List((len + 1) ~/ 2); // Each byte holds two 4-bit codes
 
     // Step size table (standard IMA ADPCM table with 89 entries)
     List<int> stepSizeTable = [
@@ -295,6 +368,12 @@ class AudioStreamingService {
     // Index table for ADPCM
     List<int> indexTable = [-1, -1, -1, -1, 2, 4, 6, 8];
 
+    // Prepare header with prevSample and index
+    ByteData header = ByteData(4);
+    header.setInt16(0, prevSample, Endian.little); // 2 bytes for prevSample
+    header.setUint8(2, index); // 1 byte for index
+    header.setUint8(3, 0); // 1 blank byte for even byte count
+
     for (int n = 0; n < len; n++) {
       int sample = (input[n * 2] & 0xFF) | ((input[n * 2 + 1] & 0xFF) << 8);
       if (sample > 32767) sample -= 65536; // Convert to signed 16-bit
@@ -354,7 +433,12 @@ class AudioStreamingService {
       }
     }
 
-    return output;
+    // Combine header and output data
+    Uint8List packet = Uint8List(header.lengthInBytes + output.length);
+    packet.setRange(0, header.lengthInBytes, header.buffer.asUint8List());
+    packet.setRange(header.lengthInBytes, packet.length, output);
+
+    return packet;
   }
 
   double getCurrentDataSendRate() {
