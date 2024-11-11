@@ -8,7 +8,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:flutter/material.dart';
 
 void main() {
   runApp(const MainApp());
@@ -152,17 +151,58 @@ class _StreamingControlState extends State<StreamingControl> {
   }
 
   Future<void> _getIpAddress() async {
+    String? ipAddress = await _getLocalIpAddress();
+    setState(() {
+      _ipAddress = ipAddress ?? 'Unbekannt';
+    });
+  }
+
+  static Future<String?> _getLocalIpAddress() async {
     try {
-      final ipAddress = await NetworkInfo().getWifiIP();
-      setState(() {
-        _ipAddress = ipAddress ?? 'Unbekannt';
-      });
+      // Erste Methode: Verwendung von NetworkInfo Plus
+      final info = NetworkInfo();
+      String? wifiIP = await info.getWifiIP();
+
+      // Wenn eine WLAN-IP gefunden wurde, diese zurückgeben
+      if (wifiIP != null && wifiIP.isNotEmpty) {
+        return wifiIP;
+      }
+
+      // Zweite Methode: Netzwerk-Interfaces durchsuchen
+      final interfaces = await NetworkInterface.list(
+        includeLinkLocal: true,
+        type: InternetAddressType.IPv4,
+      );
+
+      for (var interface in interfaces) {
+        // Suche nach der relevanten Netzwerkschnittstelle
+        if (interface.name.contains('wlan0') || // Android
+            interface.name.contains('en0') || // iOS
+            interface.name.contains('ap0')) {
+          // Android Hotspot
+          for (var addr in interface.addresses) {
+            // Ignoriere Link-Local Adressen (beginnen meist mit 169.254)
+            if (!addr.address.startsWith('169.254')) {
+              return addr.address;
+            }
+          }
+        }
+      }
+
+      // Fallback: Erste nicht-localhost IPv4-Adresse
+      for (var interface in interfaces) {
+        for (var addr in interface.addresses) {
+          if (!addr.isLoopback &&
+              addr.type == InternetAddressType.IPv4 &&
+              !addr.address.startsWith('169.254')) {
+            return addr.address;
+          }
+        }
+      }
     } catch (e) {
-      print('Fehler beim Abrufen der IP-Adresse: $e');
-      setState(() {
-        _ipAddress = 'Fehler';
-      });
+      print('Fehler beim Ermitteln der IP-Adresse: $e');
     }
+    return null;
   }
 
   Future<void> _getDeviceName() async {
