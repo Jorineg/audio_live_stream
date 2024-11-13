@@ -19,17 +19,28 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_HOSTNAME).setMethodCallHandler { call, result ->
-            if (call.method == "getHostName") {
-                GlobalScope.launch(Dispatchers.Main) {
-                    val hostname = getHostName()
-                    if (hostname != null) {
-                        result.success(hostname)
-                    } else {
-                        result.error("UNAVAILABLE", "Hostname not available.", null)
+            when (call.method) {
+                "getHostName" -> {
+                    GlobalScope.launch(Dispatchers.Main) {
+                        val hostname = getHostName()
+                        if (hostname != null) {
+                            result.success(hostname)
+                        } else {
+                            result.error("UNAVAILABLE", "Hostname not available.", null)
+                        }
                     }
                 }
-            } else {
-                result.notImplemented()
+                "restartApp" -> {
+                    val intent = packageManager.getLaunchIntentForPackage(packageName)
+                    intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                    result.success(null)
+                }
+                else -> {
+                    result.notImplemented()
+                }
             }
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_SERVICE).setMethodCallHandler { call, result ->

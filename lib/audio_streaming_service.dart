@@ -33,7 +33,12 @@ class AudioStreamingService {
 
   Future<void> initialize() async {
     if (!_isInitialized) {
-      await Permission.microphone.request();
+      var status = await Permission.microphone.status;
+      if (status.isDenied) {
+        // Return the permission request result to let the UI handle the dialog
+        return Future.error('microphone_permission_required');
+      }
+      
       await _recorder.openRecorder();
       await _recorder.setSubscriptionDuration(const Duration(milliseconds: 10));
       _isInitialized = true;

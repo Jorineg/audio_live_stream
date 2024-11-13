@@ -396,6 +396,11 @@
 
         // Initial draw of the waveform
         drawWaveform();
+
+        // Check for Safari browser and show dialog
+        if (/^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
+            alert("In case you're not using headphones, make sure that your device is not set to mute");
+        }
     </script>
 </body>
 
