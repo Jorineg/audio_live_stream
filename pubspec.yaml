@@ -1,7 +1,7 @@
 name: wifi_audio_stream
 description: "A Flutter app for streaming live audio over WiFi."
 publish_to: 'none'
-version: 0.1.0
+version: 0.1.1+2
 
 environment:
   sdk: ">=2.17.0 <3.0.0"
