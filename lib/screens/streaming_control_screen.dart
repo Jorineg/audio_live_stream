@@ -43,6 +43,9 @@ class _StreamingControlState extends State<StreamingControl> {
   bool _initialIpCheck = true;
   bool _isDialogVisible = false;
 
+  static const platform =
+      MethodChannel('com.jorin.audio_live_stream/app_control');
+
   @override
   void initState() {
     super.initState();
@@ -294,12 +297,22 @@ class _StreamingControlState extends State<StreamingControl> {
           ),
           TextButton(
             child: Text('Restart App'),
-            onPressed: () {
-              setState(() => _isDialogVisible = false);
-              if (Platform.isAndroid) {
-                SystemNavigator.pop();
-              } else {
-                exit(0);
+            onPressed: () async {
+              await _stopServer(); // Clean up resources
+              try {
+                if (Platform.isAndroid) {
+                  await platform.invokeMethod('restartApp');
+                } else {
+                  exit(0); // Fallback for iOS
+                }
+              } catch (e) {
+                print('Error restarting app: $e');
+                // Fallback to regular exit
+                if (Platform.isAndroid) {
+                  SystemNavigator.pop();
+                } else {
+                  exit(0);
+                }
               }
             },
           ),
