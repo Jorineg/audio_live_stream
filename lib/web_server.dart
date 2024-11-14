@@ -9,7 +9,8 @@ import 'dart:async';
 class WebServer {
   HttpServer? _server;
   final List<WebSocketSink> _clients = [];
-  Function(int)? onClientCountChanged;
+  final Set<WebSocketSink> _playingClients = Set();
+  Function(int, int)? onClientCountChanged;
   BonsoirBroadcast? _mdnsBroadcast;
   final StreamController<double> _latencyStreamController =
       StreamController.broadcast();
@@ -123,25 +124,35 @@ class WebServer {
     webSocket.sink.add(lastMicStatus);
     _clients.add(webSocket.sink);
     print('Aktuelle Anzahl der Clients: ${_clients.length}');
-    onClientCountChanged?.call(_clients.length);
+    onClientCountChanged?.call(_clients.length, _playingClients.length);
 
     webSocket.stream.listen(
       (message) {
-        if (message is String && message.startsWith('time:')) {
-          _handleTimestampMessage(message);
+        if (message is String) {
+          if (message.startsWith('time:')) {
+            _handleTimestampMessage(message);
+          } else if (message == 'play') {
+            _playingClients.add(webSocket.sink);
+            onClientCountChanged?.call(_clients.length, _playingClients.length);
+          } else if (message == 'stop') {
+            _playingClients.remove(webSocket.sink);
+            onClientCountChanged?.call(_clients.length, _playingClients.length);
+          }
         }
       },
       onDone: () {
         print('WebSocket-Verbindung geschlossen');
         _clients.remove(webSocket.sink);
+        _playingClients.remove(webSocket.sink);
         print('Aktuelle Anzahl der Clients: ${_clients.length}');
-        onClientCountChanged?.call(_clients.length);
+        onClientCountChanged?.call(_clients.length, _playingClients.length);
       },
       onError: (error) {
         print('WebSocket-Fehler: $error');
         _clients.remove(webSocket.sink);
+        _playingClients.remove(webSocket.sink);
         print('Aktuelle Anzahl der Clients: ${_clients.length}');
-        onClientCountChanged?.call(_clients.length);
+        onClientCountChanged?.call(_clients.length, _playingClients.length);
       },
     );
   }
@@ -153,7 +164,7 @@ class WebServer {
   void broadcastAudioData(Uint8List data) {
     List<WebSocketSink> clientsToRemove = [];
 
-    for (var client in _clients) {
+    for (var client in _playingClients) {
       try {
         client.add(data);
       } catch (e) {
@@ -164,7 +175,8 @@ class WebServer {
 
     if (clientsToRemove.isNotEmpty) {
       _clients.removeWhere((client) => clientsToRemove.contains(client));
-      onClientCountChanged?.call(_clients.length);
+      _playingClients.removeWhere((client) => clientsToRemove.contains(client));
+      onClientCountChanged?.call(_clients.length, _playingClients.length);
     }
   }
 
@@ -180,16 +192,17 @@ class WebServer {
 
   Future<void> _registerMDNSService(String mdnsName) async {
     final int port = _server!.port;
+    final String serviceName = '$mdnsName.local';
     _mdnsBroadcast = BonsoirBroadcast(
       service: BonsoirService(
-        name: mdnsName,
+        name: serviceName,
         type: '_http._tcp',
         port: port,
       ),
     );
     await _mdnsBroadcast!.ready;
     await _mdnsBroadcast!.start();
-    print('mDNS-Service mit Namen $mdnsName auf Port $port registriert');
+    print('mDNS-Service mit Namen $serviceName auf Port $port registriert');
   }
 
   Future<void> stop() async {
@@ -200,7 +213,7 @@ class WebServer {
       }
       _clients.clear();
       print('Server gestoppt');
-      // mDNS-Service stoppen
+      // Change mDNS cleanup
       await _mdnsBroadcast?.stop();
       _mdnsBroadcast = null;
       _latencyStreamController.close();

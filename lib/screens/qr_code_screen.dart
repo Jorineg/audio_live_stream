@@ -85,9 +85,47 @@ class QRCodeScreen extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (BuildContext context) {
+                    return AlertDialog(
+                      title: const Text('Connection Issues?'),
+                      content: const Text(
+                        'Please check the following:\n\n'
+                        '1. Ensure that you and your listeners are connected to the '
+                        'same network.\n\n'
+                        '2. If you have your mobile hotspot enabled, the QR code will '
+                        'show your hotspot\'s IP address. You have two options:\n'
+                        '   • Ask listeners to join your hotspot network, or\n'
+                        '   • Disable your hotspot to use the WiFi network instead\n\n'
+                        '3. Some WiFi networks (especially public or corporate networks) '
+                        'have security settings that prevent devices from communicating '
+                        'with each other. If you\'re having trouble with WiFi, using your '
+                        'phone\'s mobile hotspot might work better.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+              child: const Text(
+                'Connection issues?',
+                style: TextStyle(
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
-} 
+}

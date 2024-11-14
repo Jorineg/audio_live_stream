@@ -46,6 +46,8 @@ class _StreamingControlState extends State<StreamingControl> {
   static const platform =
       MethodChannel('com.jorin.audio_live_stream/app_control');
 
+  int _playingClients = 0;
+
   @override
   void initState() {
     super.initState();
@@ -72,9 +74,10 @@ class _StreamingControlState extends State<StreamingControl> {
       });
     });
 
-    _streamingService.webServer.onClientCountChanged = (count) {
+    _streamingService.webServer.onClientCountChanged = (count, playingCount) {
       setState(() {
         _connectedClients = count;
+        _playingClients = playingCount;
       });
     };
 
@@ -325,7 +328,7 @@ class _StreamingControlState extends State<StreamingControl> {
   @override
   Widget build(BuildContext context) {
     double dataSendRate =
-        _streamingService.getCurrentDataSendRate() * _connectedClients;
+        _streamingService.getCurrentDataSendRate() * _playingClients;
     String dataSendRateText = dataSendRate >= 1000
         ? '${(dataSendRate / 1000).toStringAsFixed(2)} Mbps'
         : '${dataSendRate.toStringAsFixed(0)} kbps';
@@ -353,8 +356,8 @@ class _StreamingControlState extends State<StreamingControl> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Connected Clients: $_connectedClients',
-              style: Theme.of(context).textTheme.titleLarge,
+              'Connected: $_connectedClients    Playing: $_playingClients',
+              style: Theme.of(context).textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),
             Center(

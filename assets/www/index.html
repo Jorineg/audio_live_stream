@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Live Stream</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -68,7 +70,7 @@
         <button id="playButton">
             <img src="play.png" alt="Play" width="64" height="64">
         </button>
-        <p id="statusMessage">Click to start audio</p>
+        <p id="statusMessage">Connecting...</p>
     </div>
     <canvas id="visualizer"></canvas>
     <script>
@@ -81,10 +83,16 @@
         let micStatus = 'mic_active';
         let isPlaying = false;
         let scheduledTime = 0;
-        const BUFFER_SIZE = 2048;  // Reduced buffer size
+        const BUFFER_SIZE = 2048;
         let visualizerData = new Float32Array(BUFFER_SIZE);
         let sampleRate = 22000;
         let adpcmCompression = false;
+        const MIN_BUFFER_DURATION = 0.15;
+        const MAX_BUFFER_DURATION = 1.2;
+        const CHUNK_AUDIO_DURATION = (2 * 1024) / (22000 * 2);
+        const decreaseRate = Math.pow(1.5, -1 / (240 / CHUNK_AUDIO_DURATION));
+        let targetBufferDuration = MIN_BUFFER_DURATION;
+
 
         // Set visualizer size
         function resizeVisualizer() {
@@ -96,23 +104,14 @@
         window.addEventListener('resize', resizeVisualizer);
         resizeVisualizer();
 
-        playButton.addEventListener('click', () => {
-            if (!audioContext) {
-                startStream();
-            } else {
-                stopStream();
-            }
-        });
-
-        function startStream() {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            console.log('Audio context sample rate:', audioContext.sampleRate);
+        // Initialize WebSocket connection immediately when page loads
+        window.addEventListener('load', () => {
             webSocket = new WebSocket('ws://' + window.location.host);
-
             webSocket.binaryType = 'arraybuffer';
+
             webSocket.onopen = () => {
                 console.log('WebSocket connection opened');
-                statusMessage.textContent = 'Connected, waiting for audio...';
+                statusMessage.textContent = 'Click to start audio';
                 updateStatusMessage();
             };
 
@@ -131,22 +130,8 @@
                         }
                     } else if (event.data.startsWith('time:')) {
                         webSocket.send(event.data);
-                    } else {
-                        try {
-                            const settings = JSON.parse(event.data);
-                            // if (settings.sr) {
-                            //     sampleRate = settings.sr;
-                            //     console.log('Received sample rate:', sampleRate);
-                            // }
-                            // if (settings.adpcm) {
-                            //     adpcmCompression = settings.adpcm;
-                            //     console.log('Received ADPCM setting:', adpcmCompression);
-                            // }
-                        } catch (error) {
-                            console.error('Error parsing settings:', error);
-                        }
                     }
-                } else if (event.data instanceof ArrayBuffer) {
+                } else if (event.data instanceof ArrayBuffer && isPlaying) {
                     if (micStatus === 'mic_muted') return;
 
                     // split off first byte that encodes header information
@@ -174,19 +159,47 @@
                     processAudioData(float32Array);
                 }
             };
+        });
 
-            playButton.innerHTML = '<img src="stop.png" alt="Stop" width="64" height="64">';
-            statusMessage.textContent = 'Connecting...';
+        playButton.addEventListener('click', () => {
+            if (!audioContext) {
+                startStream();
+            } else {
+                stopStream();
+            }
+        });
+
+        function startStream() {
+            if (!audioContext) {
+                const audioContextOptions = {
+                    sampleRate: 44100,
+                    latencyHint: 'interactive'
+                };
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)(audioContextOptions);
+
+                if (audioContext.state === 'suspended' && 'ontouchstart' in window) {
+                    audioContext.resume();
+                }
+
+                console.log('Audio context sample rate:', audioContext.sampleRate);
+                isPlaying = true;
+                webSocket.send('play'); // Send play message
+                playButton.innerHTML = '<img src="stop.png" alt="Stop" width="64" height="64">';
+                // statusMessage.innerHTML = 'Audio playing <span style="font-size: 24px;">&#128266;</span>';
+                updateStatusMessage();
+            } else {
+                stopStream();
+            }
         }
 
         function stopStream() {
-            if (webSocket) {
-                webSocket.close();
-                webSocket = null;
-            }
             if (audioContext) {
                 audioContext.close();
                 audioContext = null;
+            }
+            if (webSocket && webSocket.readyState === WebSocket.OPEN) {
+                webSocket.send('stop'); // Send stop message
             }
             isPlaying = false;
             scheduledTime = 0;
@@ -212,7 +225,6 @@
 
         function processAudioData(float32Array) {
             const resampledArray = resampleAudioData(float32Array, sampleRate, audioContext.sampleRate);
-
             const audioBuffer = audioContext.createBuffer(1, resampledArray.length, audioContext.sampleRate);
             audioBuffer.getChannelData(0).set(resampledArray);
 
@@ -223,15 +235,26 @@
             const currentTime = audioContext.currentTime;
             let playbackTime = Math.max(currentTime, scheduledTime);
 
+            // Detect lag: if current time is past the scheduled time, we have a gap
+            if (currentTime + 0.01 > scheduledTime && scheduledTime !== 0) {
+                const lagMs = Math.round((currentTime - scheduledTime) * 1000);
+                targetBufferDuration = Math.min(MAX_BUFFER_DURATION, targetBufferDuration * 1.5);
+                console.log(`Audio gap detected: ${lagMs}ms, increasing buffer duration to ${targetBufferDuration}ms`);
+                // console.log('Resetting scheduledTime. Latency too low:', playbackTime - currentTime, 'targetBufferDuration:', targetBufferDuration);
+                playbackTime = currentTime + targetBufferDuration;
+            }
+
+            // exponentially decrease buffer duration
+            // 1 minute should decrease by 1.5
+            targetBufferDuration = Math.max(MIN_BUFFER_DURATION, targetBufferDuration * decreaseRate);
+
             // if playbackTime is >= 0.5 seconds in the future, reset it to the current time
-            if (playbackTime - currentTime > 0.5) {
-                console.log('Resetting scheduledTime. Latency too high:', playbackTime - currentTime);
-                scheduledTime = currentTime;
-                playbackTime = currentTime;
+            if (playbackTime - currentTime > (2 * targetBufferDuration)) {
+                console.log('Resetting scheduledTime. Latency too high:', playbackTime - currentTime, 'targetBufferDuration:', targetBufferDuration);
+                playbackTime = currentTime + targetBufferDuration;
             }
 
             bufferSource.start(playbackTime);
-
             scheduledTime = playbackTime + audioBuffer.duration;
         }
 
@@ -398,9 +421,9 @@
         drawWaveform();
 
         // Check for Safari browser and show dialog
-        if (/^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
-            alert("In case you're not using headphones, make sure that your device is not set to mute");
-        }
+        // if (/^((?!chrome|android).)*safari/i.test(navigator.userAgent)) {
+        //     alert("In case you're not using headphones, make sure that your device is not set to silent mode.");
+        // }
     </script>
 </body>
 

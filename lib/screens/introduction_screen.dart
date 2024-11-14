@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'streaming_control_screen.dart';
+import 'settings_explanation_screen.dart';
 
 class IntroductionScreen extends StatefulWidget {
   const IntroductionScreen({super.key});
@@ -42,6 +43,7 @@ class _IntroductionScreenState extends State<IntroductionScreen> {
       'title': 'Optimize Settings',
       'text':
           'Experiencing lag? Try reducing the sample rate or enabling compression.',
+      'showExplainButton': true,
     },
     {
       'image': null,
@@ -122,6 +124,20 @@ By using this app, you agree to this privacy policy. If you have questions, plea
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
                     ),
+                    if (_pages[index]['showExplainButton'] == true) ...[
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.help_outline),
+                        label: const Text('Learn More'),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => const SettingsExplanationScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ],
                 );
               }),

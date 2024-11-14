@@ -16,12 +16,12 @@ dependencies:
   web_socket_channel: ^2.2.0
   flutter_sound: 9.16.3
   fluttertoast: ^8.0.9
-  bonsoir: ^5.1.10
   share_plus: ^10.0.3
   path_provider: ^2.0.11
   wakelock_plus: ^1.2.8
   qr_flutter: ^4.1.0
   shared_preferences: ^2.2.2
+  bonsoir: ^5.1.10
 
 dev_dependencies:
   flutter_test:
