@@ -93,6 +93,10 @@
         const decreaseRate = Math.pow(1.5, -1 / (240 / CHUNK_AUDIO_DURATION));
         let targetBufferDuration = MIN_BUFFER_DURATION;
 
+        // Variables to track packet arrival times and compute jitter
+        let lastPacketArrivalTime = null;
+        let packetIntervals = [];
+        const JITTER_WINDOW_SIZE = 50; // Number of intervals to keep for calculations
 
         // Set visualizer size
         function resizeVisualizer() {
@@ -133,6 +137,29 @@
                     }
                 } else if (event.data instanceof ArrayBuffer && isPlaying) {
                     if (micStatus === 'mic_muted') return;
+
+                    // Measure packet arrival intervals
+                    const currentTime = performance.now();
+
+                    if (lastPacketArrivalTime !== null) {
+                        const interval = currentTime - lastPacketArrivalTime;
+                        packetIntervals.push(interval);
+
+                        if (packetIntervals.length > JITTER_WINDOW_SIZE) {
+                            packetIntervals.shift(); // Keep the window size fixed
+                        }
+
+                        // Calculate mean and standard deviation
+                        const meanInterval = packetIntervals.reduce((a, b) => a + b, 0) / packetIntervals.length;
+                        const variance = packetIntervals.reduce((a, b) => a + Math.pow(b - meanInterval, 2), 0) / packetIntervals.length;
+                        const stdDeviation = Math.sqrt(variance);
+
+                        // Adjust targetBufferDuration to cover 99% of the delays
+                        const recommendedBuffer = (meanInterval + 2.33 * stdDeviation) / 1000; // Convert ms to seconds
+                        targetBufferDuration = Math.min(MAX_BUFFER_DURATION, Math.max(MIN_BUFFER_DURATION, recommendedBuffer));
+                    }
+
+                    lastPacketArrivalTime = currentTime;
 
                     // split off first byte that encodes header information
                     const header = new Uint8Array(event.data, 0, 1)[0];
@@ -235,27 +262,23 @@
             const currentTime = audioContext.currentTime;
             let playbackTime = Math.max(currentTime, scheduledTime);
 
-            // Detect lag: if current time is past the scheduled time, we have a gap
-            if (currentTime + 0.01 > scheduledTime && scheduledTime !== 0) {
-                const lagMs = Math.round((currentTime - scheduledTime) * 1000);
-                targetBufferDuration = Math.min(MAX_BUFFER_DURATION, targetBufferDuration * 1.5);
-                console.log(`Audio gap detected: ${lagMs}ms, increasing buffer duration to ${targetBufferDuration}ms`);
-                // console.log('Resetting scheduledTime. Latency too low:', playbackTime - currentTime, 'targetBufferDuration:', targetBufferDuration);
-                playbackTime = currentTime + targetBufferDuration;
-            }
+            // Calculate buffer latency
+            const bufferLatency = playbackTime - currentTime;
 
-            // exponentially decrease buffer duration
-            // 1 minute should decrease by 1.5
-            targetBufferDuration = Math.max(MIN_BUFFER_DURATION, targetBufferDuration * decreaseRate);
-
-            // if playbackTime is >= 0.5 seconds in the future, reset it to the current time
-            if (playbackTime - currentTime > (2 * targetBufferDuration)) {
-                console.log('Resetting scheduledTime. Latency too high:', playbackTime - currentTime, 'targetBufferDuration:', targetBufferDuration);
-                playbackTime = currentTime + targetBufferDuration;
+            // Adjust playback rate based on buffer latency
+            if (bufferLatency > targetBufferDuration + 0.1) {
+                // Ahead of target, speed up slightly
+                bufferSource.playbackRate.value = 1.05; // 5% faster
+            } else if (bufferLatency < targetBufferDuration - 0.1) {
+                // Behind target, slow down slightly
+                bufferSource.playbackRate.value = 0.95; // 5% slower
+            } else {
+                // Within acceptable range
+                bufferSource.playbackRate.value = 1.0;
             }
 
             bufferSource.start(playbackTime);
-            scheduledTime = playbackTime + audioBuffer.duration;
+            scheduledTime = playbackTime + (audioBuffer.duration / bufferSource.playbackRate.value);
         }
 
         function decodeADPCM8Bit(adpcmData) {
