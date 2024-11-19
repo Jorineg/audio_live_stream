@@ -61,6 +61,17 @@
             background-color: #f0f0f0;
             margin-top: 1rem;
         }
+
+        #statistics {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            font-size: 12px;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+            font-family: monospace;
+        }
     </style>
 </head>
 
@@ -73,6 +84,7 @@
         <p id="statusMessage">Connecting...</p>
     </div>
     <canvas id="visualizer"></canvas>
+    <div id="statistics">Click to show statistics</div>
     <script>
         const playButton = document.getElementById('playButton');
         const statusMessage = document.getElementById('statusMessage');
@@ -87,16 +99,21 @@
         let visualizerData = new Float32Array(BUFFER_SIZE);
         let sampleRate = 22000;
         let adpcmCompression = false;
-        const MIN_BUFFER_DURATION = 0.15;
+        const MIN_BUFFER_DURATION = 0.1;
         const MAX_BUFFER_DURATION = 1.2;
         const CHUNK_AUDIO_DURATION = (2 * 1024) / (22000 * 2);
         const decreaseRate = Math.pow(1.5, -1 / (240 / CHUNK_AUDIO_DURATION));
         let targetBufferDuration = MIN_BUFFER_DURATION;
+        let meanInterval = 0;
+        let variance = 0;
+        let stdDeviation = 0;
+        let recommendedBuffer = 0;
+        let bufferLatency = 0;
 
         // Variables to track packet arrival times and compute jitter
         let lastPacketArrivalTime = null;
         let packetIntervals = [];
-        const JITTER_WINDOW_SIZE = 50; // Number of intervals to keep for calculations
+        const JITTER_WINDOW_SIZE = 500; // Number of intervals to keep for calculations
 
         // Set visualizer size
         function resizeVisualizer() {
@@ -150,12 +167,12 @@
                         }
 
                         // Calculate mean and standard deviation
-                        const meanInterval = packetIntervals.reduce((a, b) => a + b, 0) / packetIntervals.length;
-                        const variance = packetIntervals.reduce((a, b) => a + Math.pow(b - meanInterval, 2), 0) / packetIntervals.length;
-                        const stdDeviation = Math.sqrt(variance);
+                        meanInterval = packetIntervals.reduce((a, b) => a + b, 0) / packetIntervals.length;
+                        variance = packetIntervals.reduce((a, b) => a + Math.pow(b - meanInterval, 2), 0) / packetIntervals.length;
+                        stdDeviation = Math.sqrt(variance);
 
                         // Adjust targetBufferDuration to cover 99% of the delays
-                        const recommendedBuffer = (meanInterval + 2.33 * stdDeviation) / 1000; // Convert ms to seconds
+                        recommendedBuffer = (meanInterval + 3.5 * stdDeviation) / 1000; // Convert ms to seconds
                         targetBufferDuration = Math.min(MAX_BUFFER_DURATION, Math.max(MIN_BUFFER_DURATION, recommendedBuffer));
                     }
 
@@ -250,7 +267,28 @@
             }
         }
 
+        let showStats = false;
+        let audioGaps = [];
+        let bufferTrend = 'stable';
+        let lastBufferLatency = 0;
+        const GAPS_WINDOW = 60000; // 1 minute in milliseconds
+
         function processAudioData(float32Array) {
+            const currentTime = audioContext.currentTime;
+            let playbackTime = Math.max(currentTime, scheduledTime);
+
+            // Check for gaps
+            if (scheduledTime > 0 && currentTime > scheduledTime + 0.01) { // Gap larger than 10ms
+                audioGaps.push({
+                    time: Date.now(),
+                    duration: currentTime - scheduledTime
+                });
+            }
+
+            // Clean up old gaps
+            const now = Date.now();
+            audioGaps = audioGaps.filter(gap => now - gap.time < GAPS_WINDOW);
+
             const resampledArray = resampleAudioData(float32Array, sampleRate, audioContext.sampleRate);
             const audioBuffer = audioContext.createBuffer(1, resampledArray.length, audioContext.sampleRate);
             audioBuffer.getChannelData(0).set(resampledArray);
@@ -259,27 +297,59 @@
             bufferSource.buffer = audioBuffer;
             bufferSource.connect(audioContext.destination);
 
-            const currentTime = audioContext.currentTime;
-            let playbackTime = Math.max(currentTime, scheduledTime);
-
             // Calculate buffer latency
-            const bufferLatency = playbackTime - currentTime;
+            bufferLatency = playbackTime - currentTime;
 
             // Adjust playback rate based on buffer latency
             if (bufferLatency > targetBufferDuration + 0.1) {
                 // Ahead of target, speed up slightly
                 bufferSource.playbackRate.value = 1.05; // 5% faster
+                bufferTrend = 'decreasing';
             } else if (bufferLatency < targetBufferDuration - 0.1) {
                 // Behind target, slow down slightly
                 bufferSource.playbackRate.value = 0.95; // 5% slower
+                bufferTrend = 'increasing';
             } else {
                 // Within acceptable range
                 bufferSource.playbackRate.value = 1.0;
+                bufferTrend = 'stable';
             }
 
             bufferSource.start(playbackTime);
             scheduledTime = playbackTime + (audioBuffer.duration / bufferSource.playbackRate.value);
         }
+
+        function updateStatistics() {
+            if (!showStats) return;
+
+            const stats = document.getElementById('statistics');
+
+            // Use pre-calculated values from websocket onmessage
+            const trendText = {
+                'increasing': 'increasing',
+                'decreasing': 'decreasing',
+                'stable': 'stable\u00A0\u00A0\u00A0\u00A0'  // using non-breaking spaces
+            }[bufferTrend];
+
+            stats.innerHTML = `Buffer: ${Math.round(bufferLatency * 1000)}ms (${trendText}) | ` +
+                `Recommended: ${Math.round(recommendedBuffer * 1000)}ms | ` +
+                `Target: ${Math.round(targetBufferDuration * 1000)}ms | ` +
+                `Std Dev: ${Math.round(stdDeviation)}ms | ` +  // using pre-calculated value
+                `Gaps: ${audioGaps.length} in last minute | ` +
+                `Click to hide statistics`;
+        }
+
+        document.getElementById('statistics').addEventListener('click', () => {
+            showStats = !showStats;
+            const stats = document.getElementById('statistics');
+            if (!showStats) {
+                stats.textContent = 'Click to show statistics';
+            } else {
+                updateStatistics();
+            }
+        });
+
+        setInterval(updateStatistics, 500);  // Changed to 500ms
 
         function decodeADPCM8Bit(adpcmData) {
             // Ensure adpcmData is a Uint8Array
