@@ -27,7 +27,11 @@ const MEAN_BUFFER_LATENCY_EMA_FACTOR = 0.995;
 // Variables to track packet arrival times and compute jitter
 let lastPacketArrivalTime = null;
 let packetIntervals = [];
-const JITTER_WINDOW_SIZE = 2000; // Number of intervals to keep for calculations
+const JITTER_WINDOW_SIZE = 4000; // Number of intervals to keep for calculations, about 1 minute of audio
+
+// Add these variables at the top with other declarations
+let packetTimestamps = [];
+const PACKET_WINDOW_SIZE = 10000; // 10 seconds in milliseconds
 
 // Set visualizer size
 function resizeVisualizer() {
@@ -142,8 +146,10 @@ function initializeWebSocket() {
                 variance = packetIntervals.reduce((a, b) => a + Math.pow(b - meanInterval, 2), 0) / packetIntervals.length;
                 stdDeviation = Math.sqrt(variance);
 
+                console.log(meanInterval, stdDeviation);
+
                 // Adjust targetBufferDuration to cover 99% of the delays
-                recommendedBuffer = (meanInterval + 4 * stdDeviation) / 1000; // Convert ms to seconds
+                recommendedBuffer = (meanInterval + 6 * stdDeviation) / 1000; // Convert ms to seconds
                 targetBufferDuration = Math.min(MAX_BUFFER_DURATION, Math.max(MIN_BUFFER_DURATION, recommendedBuffer));
             }
 
@@ -172,6 +178,17 @@ function initializeWebSocket() {
 
             updateVisualizer(float32Array);
             processAudioData(float32Array);
+
+            // Add packet timestamp tracking
+            const now = Date.now();
+            packetTimestamps.push(now);
+
+            // Remove timestamps older than 10 seconds
+            packetTimestamps = packetTimestamps.filter(timestamp => now - timestamp < PACKET_WINDOW_SIZE);
+
+            // Calculate and log packets per second
+            const packetsPerSecond = packetTimestamps.length / 10;
+            // console.log(`Packets per second: ${packetsPerSecond.toFixed(1)}`);
         }
     };
 }
