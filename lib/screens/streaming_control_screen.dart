@@ -462,9 +462,9 @@ class _StreamingControlState extends State<StreamingControl> {
         ),
         Slider(
           value: _sampleRate,
-          min: 8000,
+          min: 10000,
           max: 22000,
-          divisions: 14,
+          divisions: 12,
           label: '${_sampleRate.toInt()} Hz',
           onChanged: (double value) {
             setState(() {
