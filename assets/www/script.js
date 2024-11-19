@@ -22,7 +22,7 @@ let stdDeviation = 0;
 let recommendedBuffer = 0;
 let bufferLatency = 0;
 let meanBufferLatency = 0;
-const MEAN_BUFFER_LATENCY_EMA_FACTOR = 0.995;
+const MEAN_BUFFER_LATENCY_EMA_FACTOR = 0.992;
 
 // Variables to track packet arrival times and compute jitter
 let lastPacketArrivalTime = null;
@@ -146,7 +146,7 @@ function initializeWebSocket() {
                 variance = packetIntervals.reduce((a, b) => a + Math.pow(b - meanInterval, 2), 0) / packetIntervals.length;
                 stdDeviation = Math.sqrt(variance);
 
-                console.log(meanInterval, stdDeviation);
+                // console.log(meanInterval, stdDeviation);
 
                 // Adjust targetBufferDuration to cover 99% of the delays
                 recommendedBuffer = (meanInterval + 6 * stdDeviation) / 1000; // Convert ms to seconds
@@ -296,7 +296,12 @@ function processAudioData(float32Array) {
 
 
     // Adjust playback rate based on buffer latency
-    if (meanBufferLatency > targetBufferDuration + 0.15 || (bufferTrend === 'decreasing' && meanBufferLatency > targetBufferDuration)) {
+    if (meanBufferLatency > targetBufferDuration + 2) {
+        bufferSource.playbackRate.value = 1.0;
+        bufferTrend = 'stable';
+        scheduledTime = currentTime + targetBufferDuration;
+        meanBufferLatency = targetBufferDuration;
+    } else if (meanBufferLatency > targetBufferDuration + 0.15 || (bufferTrend === 'decreasing' && meanBufferLatency > targetBufferDuration)) {
         // Ahead of target, speed up slightly
         bufferSource.playbackRate.value = fastRate;
         bufferTrend = 'decreasing';
