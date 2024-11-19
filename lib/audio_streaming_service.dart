@@ -29,6 +29,13 @@ class AudioStreamingService {
   int prevSample = 0;
   int index = 0;
 
+  // Global state to maintain continuity between chunks
+  List<int> _lastSamples = [];
+  double _accumulator = 0.0;
+  final int _filterLength = 61; // Should be odd number
+  // Pre-calculate filter coefficients for different ratios
+  Map<int, List<double>> _filterCoefficients = {};
+
   Stream<double> get micLevelStream => _micLevelController.stream;
 
   Future<void> initialize() async {
@@ -38,7 +45,7 @@ class AudioStreamingService {
         // Return the permission request result to let the UI handle the dialog
         return Future.error('microphone_permission_required');
       }
-      
+
       await _recorder.openRecorder();
       await _recorder.setSubscriptionDuration(const Duration(milliseconds: 10));
       _isInitialized = true;
@@ -170,56 +177,119 @@ class AudioStreamingService {
 
   void setSampleRate(double sampleRate) {
     _currentSampleRate = sampleRate;
+    resetDownsamplingState();
   }
 
   void setAdpcmCompression(bool adpcmCompression) {
     _adpcmCompression = adpcmCompression;
   }
 
-  Uint8List _downsample(
-      Uint8List input, int inputSampleRate, double outputSampleRate) {
-    if (inputSampleRate == outputSampleRate) {
-      return input;
+  List<double> _getLowPassCoefficients(double cutoffFreq, int sampleRate) {
+    int cacheKey = (cutoffFreq * 100).round();
+    if (_filterCoefficients.containsKey(cacheKey)) {
+      return _filterCoefficients[cacheKey]!;
     }
 
-    // Convert Uint8List to List<double> (assuming 16-bit PCM)
-    final int numSamples = input.length ~/ 2;
-    final samples = List<double>.generate(numSamples, (i) {
-      int index = i * 2;
-      // Little-endian to int16
-      int sample = input[index] | (input[index + 1] << 8);
-      // Convert to signed value
-      if (sample >= 0x8000) sample -= 0x10000;
-      return sample.toDouble();
-    });
+    List<double> coeffs = List<double>.filled(_filterLength, 0);
+    double sum = 0;
+    int halfway = _filterLength ~/ 2;
+
+    for (int i = 0; i < _filterLength; i++) {
+      if (i == halfway) {
+        coeffs[i] = 2 * cutoffFreq / sampleRate;
+      } else {
+        double x = 2 * pi * cutoffFreq * (i - halfway) / sampleRate;
+        coeffs[i] = sin(x) / x;
+      }
+      coeffs[i] *= (0.54 - 0.46 * cos(2 * pi * i / (_filterLength - 1)));
+      sum += coeffs[i];
+    }
+
+    for (int i = 0; i < _filterLength; i++) {
+      coeffs[i] /= sum;
+    }
+
+    _filterCoefficients[cacheKey] = coeffs;
+    return coeffs;
+  }
+
+  Uint8List _downsample(
+      Uint8List input, int inputSampleRate, double outputSampleRate) {
+    if (input.length < 2) return Uint8List(0);
+    if (inputSampleRate == outputSampleRate) return input;
+
+    // Convert input bytes to 16-bit samples
+    List<int> samples = [];
+    for (int i = 0; i < input.length - 1; i += 2) {
+      int sample = input[i] | (input[i + 1] << 8);
+      if (sample > 32767) sample -= 65536;
+      samples.add(sample);
+    }
+
+    // Handle empty or too small input
+    if (samples.isEmpty) return Uint8List(0);
+
+    // Prepare samples with padding
+    List<int> paddedSamples = List<int>.from(_lastSamples);
+    paddedSamples.addAll(samples);
+
+    // Update last samples for next chunk
+    if (samples.length >= _filterLength) {
+      _lastSamples = samples.sublist(samples.length - _filterLength);
+    } else {
+      _lastSamples = samples;
+    }
 
     // Apply low-pass filter
-    final filteredSamples =
-        _lowPassFilter(samples, inputSampleRate, outputSampleRate);
+    double cutoffFreq =
+        min(outputSampleRate / 2, inputSampleRate / 2); // Nyquist frequency
+    List<double> coeffs = _getLowPassCoefficients(cutoffFreq, inputSampleRate);
 
-    // Resample
-    final sampleRateRatio = outputSampleRate / inputSampleRate;
-    final newLength = (filteredSamples.length * sampleRateRatio).round();
-    final resampledSamples = List<double>.generate(newLength, (i) {
-      final index = i / sampleRateRatio;
-      final floorIndex = index.floor();
-      final ceilIndex = index.ceil();
-      if (ceilIndex >= filteredSamples.length) {
-        return filteredSamples.last;
+    List<double> filteredSamples = [];
+    int halfFilter = _filterLength ~/ 2;
+
+    for (int i = halfFilter; i < paddedSamples.length - halfFilter; i++) {
+      double sum = 0;
+      for (int j = 0; j < _filterLength; j++) {
+        if ((i + j - halfFilter) >= 0 &&
+            (i + j - halfFilter) < paddedSamples.length) {
+          sum += paddedSamples[i + j - halfFilter] * coeffs[j];
+        }
       }
-      final weight = index - floorIndex;
-      return filteredSamples[floorIndex] * (1 - weight) +
-          filteredSamples[ceilIndex] * weight;
-    });
+      filteredSamples.add(sum);
+    }
 
-    // Convert back to Uint8List
-    final output = Uint8List(newLength * 2);
-    for (int i = 0; i < newLength; i++) {
-      int sample = resampledSamples[i].round();
-      // Clipping
-      if (sample > 32767) sample = 32767;
-      if (sample < -32768) sample = -32768;
-      // Convert to little-endian bytes
+    // Handle empty filtered samples
+    if (filteredSamples.isEmpty) return Uint8List(0);
+
+    // Perform downsampling
+    final ratio = inputSampleRate / outputSampleRate;
+    List<int> outputSamples = [];
+
+    while (_accumulator < filteredSamples.length - 1) {
+      int index = _accumulator.floor();
+      if (index >= filteredSamples.length - 1) break;
+
+      double frac = _accumulator - index;
+      double sample1 = filteredSamples[index];
+      double sample2 = filteredSamples[index + 1];
+      int interpolatedSample = (sample1 + (sample2 - sample1) * frac).round();
+
+      interpolatedSample = max(-32768, min(32767, interpolatedSample));
+      outputSamples.add(interpolatedSample);
+
+      _accumulator += ratio;
+    }
+
+    // Adjust accumulator for next chunk
+    _accumulator -= filteredSamples.length;
+    if (_accumulator < 0) _accumulator = 0;
+
+    // Convert back to bytes (little-endian)
+    Uint8List output = Uint8List(outputSamples.length * 2);
+    for (int i = 0; i < outputSamples.length; i++) {
+      int sample = outputSamples[i];
+      if (sample < 0) sample += 65536;
       output[i * 2] = sample & 0xFF;
       output[i * 2 + 1] = (sample >> 8) & 0xFF;
     }
@@ -227,49 +297,10 @@ class AudioStreamingService {
     return output;
   }
 
-  List<double> _lowPassFilter(
-      List<double> samples, int inputSampleRate, double outputSampleRate) {
-    final cutoffFreq = outputSampleRate / 2; // Nyquist frequency
-    final filterLength = 101; // Adjust for your needs (must be odd)
-    final filter = List<double>.filled(filterLength, 0);
-    final m = (filterLength - 1) / 2;
-
-    // Sinc filter coefficients
-    for (int n = 0; n < filterLength; n++) {
-      if (n == m) {
-        filter[n] = 2 * cutoffFreq / inputSampleRate;
-      } else {
-        final piTerm = pi * (n - m);
-        filter[n] =
-            sin(2 * cutoffFreq * (n - m) * pi / inputSampleRate) / piTerm;
-      }
-      // Apply Hamming window
-      filter[n] *= 0.54 - 0.46 * cos(2 * pi * n / (filterLength - 1));
-    }
-
-    // Normalize filter coefficients
-    final sum = filter.reduce((a, b) => a + b);
-    for (int n = 0; n < filterLength; n++) {
-      filter[n] /= sum;
-    }
-
-    // Convolve signal with filter
-    final paddedSamples =
-        List<double>.filled(samples.length + filterLength - 1, 0);
-    for (int i = 0; i < samples.length; i++) {
-      paddedSamples[i + (filterLength ~/ 2)] = samples[i];
-    }
-
-    final output = List<double>.filled(samples.length, 0);
-    for (int i = 0; i < samples.length; i++) {
-      double acc = 0;
-      for (int j = 0; j < filterLength; j++) {
-        acc += paddedSamples[i + j] * filter[j];
-      }
-      output[i] = acc;
-    }
-
-    return output;
+  void resetDownsamplingState() {
+    _lastSamples = [];
+    _accumulator = 0.0;
+    _filterCoefficients.clear();
   }
 
   Uint8List _encodeADPCM8Bit(Uint8List input) {
