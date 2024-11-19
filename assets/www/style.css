@@ -1,0 +1,101 @@
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    background-color: #f0f0f0;
+    overflow-x: hidden;
+}
+
+h1 {
+    margin-bottom: 1rem;
+}
+
+.container {
+    text-align: center;
+    background-color: white;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    width: 90%;
+    max-width: 400px;
+    box-sizing: border-box;
+}
+
+#playButton {
+    border: none;
+    background: none;
+    padding: 0;
+}
+
+#statusMessage {
+    font-size: 18px;
+    margin-top: 1rem;
+    min-height: 27px;
+}
+
+#statusMessage.playing {
+    color: green;
+}
+
+#statusMessage.muted {
+    color: orange;
+}
+
+#visualizer {
+    width: 100%;
+    height: 100px;
+    background-color: #f0f0f0;
+    margin-top: 1rem;
+}
+
+#statistics {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    font-size: 12px;
+    color: #666;
+    cursor: pointer;
+    user-select: none;
+    font-family: monospace;
+}
+
+#connectionOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+#connectionOverlay.hidden {
+    display: none;
+}
+
+.overlay-content {
+    text-align: center;
+    color: white;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 5px solid #f3f3f3;
+    border-top: 5px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+} 
